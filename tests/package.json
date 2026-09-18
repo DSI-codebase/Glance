@@ -1,0 +1,12 @@
+{
+  "name": "glance-tests",
+  "version": "1.0.0",
+  "private": true,
+  "license": "0BSD",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

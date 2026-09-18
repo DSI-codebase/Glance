@@ -1,0 +1,19 @@
+{
+  "name": "glance",
+  "version": "0.6.2",
+  "private": true,
+  "description": "Glance — fast, minimal Markdown reader and editor",
+  "license": "0BSD",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MoogMan1073/Glance.git"
+  },
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

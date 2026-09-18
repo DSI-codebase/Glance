@@ -1,0 +1,107 @@
+name: CI
+
+# Verification only. Publishing lives in release.yml, triggered by a version
+# tag, so there is exactly one path that can produce a release.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-frontend:
+    name: Frontend tests (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # The version is declared five times at six sites and only ONE of them
+      # was ever read -- by release.yml, at tag time. Everything before a tag
+      # checked none of them, so five could drift for weeks and the first sign
+      # would be a release whose installer is named after a different version
+      # than the app reports. Needs no dependencies, so it runs first.
+      - name: The version declarations agree
+        run: node scripts/check-versions.mjs
+      # The licensing invariant, which CLAUDE.md calls invisible from inside
+      # the repository: a file added to src/vendor/ ships in the installer the
+      # moment it is committed (`frontendDist` is `../src`), and MIT, ISC and
+      # the BSD licenses require the notice to travel with the DISTRIBUTED
+      # form. A repository can look fully compliant while every shipped binary
+      # is not. Needs no dependencies either, so it runs beside the version
+      # check rather than waiting for a release.
+      - name: The notices cover what ships, and ship with it
+        run: node scripts/check-notices.mjs
+      # The `repository` URL is a literal in both manifests, because neither
+      # format can derive one -- and a wrong one is silent: nothing reads it at
+      # runtime, so the app builds and runs while pointing every reader at a
+      # repository that is not this one. A RENAME survives on GitHub's redirect;
+      # a repository recreated fresh under another account does not. Git is the
+      # oracle rather than the other manifest, which would agree while both were
+      # stale together. Needs no dependencies, so it runs with the two above.
+      - name: The repository URLs name this checkout's own account
+        run: node scripts/check-metadata.mjs
+      - name: Install test dependencies
+        working-directory: tests
+        run: npm ci
+      - name: Install Chromium
+        working-directory: tests
+        run: npx playwright install --with-deps chromium
+      - name: Run tests
+        working-directory: tests
+        run: npx playwright test
+
+  build-windows:
+    name: Windows build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Install Tauri CLI
+        run: npm ci
+      # `npm run build` succeeding was the Rust shell's ONLY gate: a compile,
+      # nothing more. It says nothing about whether the code is right, and the
+      # functions deciding whether a file is about to be destroyed on save --
+      # `decode_for_display`, `write_would_destroy`, `reapply_encoding` -- are
+      # pure precisely so something can ask.
+      #
+      # These run HERE rather than in a job of their own: the toolchain, the
+      # cache and the platform dependencies are already set up on this runner,
+      # and a second job would compile the tree twice for no extra signal.
+      # They run BEFORE the build so a lint failure is reported as a lint
+      # failure rather than as a build that fell over.
+      #
+      # Windows-only, deliberately, and the reason is written down so nobody
+      # "fixes" the asymmetry: this is the platform the app ships on, and
+      # `cargo test` on ubuntu needs the GTK/WebKit stack installed for a
+      # target nothing here builds for.
+      - name: Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+      - name: Rust lints
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Build app and installer
+        run: npm run build
+      - name: Upload installer
+        uses: actions/upload-artifact@v5
+        with:
+          name: Glance-installer
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+      - name: Upload portable exe
+        uses: actions/upload-artifact@v5
+        with:
+          name: Glance-portable
+          path: src-tauri/target/release/glance.exe
+          if-no-files-found: error

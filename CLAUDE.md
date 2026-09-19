@@ -149,6 +149,72 @@ Falsified six ways, each on its own arm and every one firing: either manifest
 naming another account, both naming it together, `package.json`'s key removed,
 the Cargo `[package]` anchor renamed, and the parse no longer discriminating.
 
+### The move landed, and the section above names two of the FOUR sites a sweep finds
+
+`package.json:9` and `src-tauri/Cargo.toml:7` name `DSI-codebase/Glance` as of
+2026-09-19. **`check-metadata.mjs` was red before the edit and green after, on
+exactly those two lines** — so the gate written ahead of the move is what
+located it, rather than a sweep somebody ran by hand.
+
+What the section does not say is the half worth adding. A case-insensitive
+sweep of the tracked tree finds **four** sites, and the two it omits are the
+two a reader following the heading gets wrong:
+
+| site | what the move does to it |
+|---|---|
+| `package.json`'s `repository.url` | **edited** |
+| `src-tauri/Cargo.toml`'s `[package] repository` | **edited** |
+| `src-tauri/tauri.conf.json`'s `identifier` | **FROZEN — the rewrite is the damage** |
+| this file, the sweep sentence above | a dated record; rewriting it destroys the observation |
+
+- **THE IDENTIFIER IS THE TRAP, AND IT IS INVISIBLE TO THE SWEEP THAT FINDS
+  THE OTHER THREE.** It is `io.github.<account>.glance` — the value is in
+  `src-tauri/tauri.conf.json:5` and is deliberately not repeated here, for the
+  reason the next paragraph measures. Lowercase reverse-DNS, so a grep keyed on
+  the remote's own spelling misses it entirely and a case-insensitive one
+  offers it beside two lines that must be edited. Nothing
+  resolves an identifier, so the move cannot break it; NSIS keys the Windows
+  upgrade registry entry on it, so a rewrite makes the next installer sit
+  **beside** the previous install rather than replacing it.
+  `check-metadata.mjs` pins it by sha256 — not by comparing it against the
+  remote, which is right on move day and red for ever after, and not as a
+  literal, which would put a second copy of the string in the file that counts
+  them. Its header carries that reasoning; what announces it on the day is the
+  do-not-edit table in Pathforward's `docs/COMPANY-ACCOUNT-MOVE.md`. One
+  mechanism per job.
+- **BOTH PROBLEM KINDS ARE REPORTED IN ONE RUN, deliberately.** Exiting on the
+  two `repository` failures first leaves the reader editing all three account
+  strings by analogy and meeting the do-not-edit line on the next run, by which
+  time the identifier is already rewritten.
+- **THE NAMED-BY-ONE-FILE CHECK FIRED ON THIS WRITE-UP, which is the strongest
+  evidence it is load-bearing.** The first draft of the bullet above quoted the
+  identifier verbatim, and `check-metadata.mjs` went red naming
+  `["CLAUDE.md","src-tauri/tauri.conf.json"]` — correctly, because a second
+  copy in the design record is a second thing a find-and-replace reaches on the
+  one day somebody is reaching for all of them. This is the dead-gate trap
+  **inverted**: the usual failure is a check satisfied by the comment explaining
+  the defect, and here the check fires on it. The responses are opposite —
+  there, tighten the check; here, fix the document. **Never add an exemption for
+  the text explaining the thing**, which would be a waiver aimed at exactly the
+  file most likely to carry it.
+- **"Nothing reads either field at runtime" is a MEASUREMENT now rather than a
+  claim.** Zero occurrences of `CARGO_PKG_REPOSITORY` and zero of any
+  `CARGO_PKG_*` under `src-tauri/src/`, and the field is named in neither
+  `build.rs` nor `tauri.conf.json` — so the Cargo edit cannot reach compiled
+  behavior. `cargo metadata` reads the new value, and `Cargo.lock` names the
+  account **0** times: its 509 `github.com` hits are all
+  `rust-lang/crates.io-index`, which is the registry rather than an owner.
+
+**Which gates passed, and the one that did not run.** The three
+dependency-free checks exit 0; the Playwright suite is **126 passed**;
+`cargo fmt --all -- --check` is clean, `cargo clippy --all-targets -- -D
+warnings` is clean, and `cargo test` is **16 passed, 0 failed**. The two Rust
+gates needed the GTK install this file already records as worth doing — with
+`apt-get update` first, since the image's cached lists 404 on two archives.
+**`npm run build` did NOT run**: it bundles through NSIS on `windows-latest`,
+and the Windows job is its first execution, exactly as the section on that
+platform says.
+
 ## The notices have to ship INSIDE the installer
 
 `THIRD-PARTY-NOTICES.md` at the repository root satisfies nothing for somebody

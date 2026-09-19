@@ -4,7 +4,7 @@ version = "0.6.2"
 description = "Glance — fast, minimal Markdown reader and editor"
 authors = ["DSI Innovations, LLC"]
 license = "0BSD"
-repository = "https://github.com/MoogMan1073/Glance"
+repository = "https://github.com/DSI-codebase/Glance"
 edition = "2021"
 rust-version = "1.77"
 

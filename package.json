@@ -6,7 +6,7 @@
   "license": "0BSD",
   "repository": {
     "type": "git",
-    "url": "https://github.com/MoogMan1073/Glance.git"
+    "url": "https://github.com/DSI-codebase/Glance.git"
   },
   "scripts": {
     "tauri": "tauri",

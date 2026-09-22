@@ -42,6 +42,16 @@ jobs:
       # stale together. Needs no dependencies, so it runs with the two above.
       - name: The repository URLs name this checkout's own account
         run: node scripts/check-metadata.mjs
+
+      # CLAUDE.md and every unscoped `.claude/rules/*.md` are loaded on every
+      # turn, so their combined length is a standing cost rather than a style
+      # preference. Two repositories here split one of these files and grew it
+      # back without noticing, which is why this is a gate. It also resolves the
+      # records table against `docs/decisions/` in both directions, so a record
+      # cannot be dropped and one cannot be left with nothing pointing at it.
+      # Needs no dependencies, so it runs with the three above.
+      - name: The every-turn context budget, and the records
+        run: node scripts/check-docs.mjs
       - name: Install test dependencies
         working-directory: tests
         run: npm ci

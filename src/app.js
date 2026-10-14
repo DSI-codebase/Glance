@@ -47,6 +47,7 @@
   const tabbar = document.getElementById('tabbar');
   const headingSelect = document.getElementById('sel-heading');
   const themeBtn = document.getElementById('btn-theme');
+  const onTopBtn = document.getElementById('btn-ontop');
   const helpOverlay = document.getElementById('helpOverlay');
   const helpContent = document.getElementById('helpContent');
   const toast = document.getElementById('toast');
@@ -474,6 +475,8 @@
         },
         x: typeof screenX === 'number' ? screenX : null,
         y: typeof screenY === 'number' ? screenY : null,
+        // Created pinned when this window is, or it opens behind this one.
+        pinned: onTop,
       });
     } catch (err) {
       showToast(String(err), true);
@@ -904,6 +907,52 @@
 
   if (darkQuery && darkQuery.addEventListener) {
     darkQuery.addEventListener('change', () => { if (themePref === 'system') applyTheme(); });
+  }
+
+  // ---------------- Keep on top ----------------
+  // Per window, because it is a property of the OS window: each torn-off
+  // window has its own. Not remembered between launches, unlike the theme — a
+  // pin set last week would make a double-clicked file open over everything
+  // with nothing on screen saying why.
+  //
+  // `onTop` changes only after the window has, so the button never shows a
+  // state the OS refused. A browser has no window to pin, so the button goes.
+
+  let onTop = false;
+  let onTopBusy = false;
+
+  function showOnTop() {
+    onTopBtn.setAttribute('aria-pressed', String(onTop));
+    onTopBtn.title = `Keep on top: ${onTop ? 'On' : 'Off'} (Ctrl+Shift+T)`;
+  }
+
+  async function toggleOnTop() {
+    const w = tauri.currentWindow();
+    // Two clicks inside one round trip would both read "off" and both ask for
+    // "on"; the second answer then flips the button back, and the window ends
+    // on top with its button saying it is not.
+    if (!w || onTopBusy) return;
+    onTopBusy = true;
+    try {
+      await w.setAlwaysOnTop(!onTop);
+      onTop = !onTop;
+      showOnTop();
+      showToast(`Keep on top: ${onTop ? 'on' : 'off'}`);
+    } catch (err) {
+      showToast(`Could not change keep on top: ${err}`, true);
+    } finally {
+      onTopBusy = false;
+    }
+  }
+
+  // Ask the window rather than assuming off: a window torn off a pinned one is
+  // created pinned, and this is how its button learns that. Not awaited by
+  // startup — the main window answers false, which is already what is drawn.
+  async function syncOnTop() {
+    const w = tauri.currentWindow();
+    if (!w) { onTopBtn.hidden = true; return; }
+    try { onTop = !!(await w.isAlwaysOnTop()); } catch (e) { return; }
+    showOnTop();
   }
 
   // ---------------- Editor text manipulation ----------------
@@ -2150,6 +2199,7 @@
   on('btn-view-split', () => setView('split'));
   on('btn-view-read', () => setView('read'));
   on('btn-view-live', () => setView('live'));
+  on('btn-ontop', toggleOnTop);
   on('btn-theme', cycleTheme);
   on('btn-help', () => toggleHelp());
   on('btn-help-close', () => toggleHelp(false));
@@ -2351,6 +2401,8 @@
       switch (e.key.toLowerCase()) {
         case 's': e.preventDefault(); fileSaveAs(); return;
         case 'd': e.preventDefault(); cycleTheme(); return;
+        // T for top, the letter PowerToys' Win+Ctrl+T uses for the same act.
+        case 't': e.preventDefault(); if (!e.repeat) toggleOnTop(); return;
       }
     }
 
@@ -2440,6 +2492,7 @@
 
   async function init() {
     applyTheme();
+    syncOnTop();
 
     // A window created by tearing off a tab has its document waiting on the
     // Rust side under this window's label; every other window gets null back.

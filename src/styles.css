@@ -149,6 +149,16 @@ body {
 }
 .tb-view.active:hover { background: var(--accent); }
 
+/* Keep on top is lit the way the active view is. Drawn from aria-pressed
+   rather than a class, so what a screen reader is told and what is on
+   screen are one attribute and cannot disagree. */
+#btn-ontop[aria-pressed="true"],
+#btn-ontop[aria-pressed="true"]:hover {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+#btn-ontop[hidden] { display: none; }
+
 body[data-view="read"] .edit-only { display: none; }
 
 /* ---------------- Tab bar ---------------- */

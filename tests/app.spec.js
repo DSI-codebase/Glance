@@ -35,6 +35,11 @@ function tauriStub(opts) {
       newWindowFails: false,
       handoffDoc: null,
       clipboardText: '',
+      // What the OS says about this window. A window torn off a pinned one is
+      // created pinned, so a test starts it true rather than calling the setter.
+      onTop: false,
+      onTopFails: false,
+      onTopDelay: 0,
     }, ${JSON.stringify(opts || {})});
     const T = () => window.__TAURI_TEST__;
     window.__TAURI__ = {
@@ -106,6 +111,12 @@ function tauriStub(opts) {
           close: async () => { T().closed = true; },
           destroy: async () => { T().closed = true; },
           onCloseRequested: (h) => { T().closeHandler = h; },
+          isAlwaysOnTop: async () => T().onTop,
+          setAlwaysOnTop: async (v) => {
+            if (T().onTopDelay) await new Promise((r) => setTimeout(r, T().onTopDelay));
+            if (T().onTopFails) throw 'window.set_always_on_top not allowed';
+            T().onTop = v;
+          },
         }),
       },
       event: {
@@ -1060,6 +1071,98 @@ test('a torn-off document that was dirty arrives dirty, in edit view', async ({ 
   await expect(page).toHaveTitle(/^● m\.md/);
   await expect(page.locator('body')).toHaveAttribute('data-view', 'edit');
   expect(await editorValue(page)).toBe('edited');
+});
+
+// ---------------------------------------------------------------
+// Keep on top
+// ---------------------------------------------------------------
+
+// The stub's record of the OS window, which is the thing being asked to
+// change. The button is checked separately: each can be right while the other
+// is wrong.
+const windowOnTop = (page) => page.evaluate(() => window.__TAURI_TEST__.onTop);
+
+test('the pin button keeps the window on top, and a second click lets it go', async ({ page }) => {
+  await boot(page);
+  const pin = page.locator('#btn-ontop');
+  await expect(pin).toHaveAttribute('aria-pressed', 'false');
+  await pin.click();
+  await expect(pin).toHaveAttribute('aria-pressed', 'true');
+  await expect(pin).toHaveAttribute('title', /On/);
+  expect(await windowOnTop(page)).toBe(true);
+  await pin.click();
+  await expect(pin).toHaveAttribute('aria-pressed', 'false');
+  expect(await windowOnTop(page)).toBe(false);
+});
+
+test('Ctrl+Shift+T toggles keep on top, in read view as well', async ({ page }) => {
+  await boot(page);
+  await page.keyboard.press('Control+3');
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'read');
+  await page.keyboard.press('Control+Shift+t');
+  await expect(page.locator('#btn-ontop')).toHaveAttribute('aria-pressed', 'true');
+  expect(await windowOnTop(page)).toBe(true);
+  await page.keyboard.press('Control+Shift+t');
+  await expect(page.locator('#btn-ontop')).toHaveAttribute('aria-pressed', 'false');
+  expect(await windowOnTop(page)).toBe(false);
+});
+
+test('a double-click on the pin cannot leave the button and the window disagreeing', async ({ page }) => {
+  // Both clicks land inside one slow round trip. Unguarded, each reads "off"
+  // and asks for "on", then each flips the button: the window ends on top
+  // with its button saying it is not.
+  await boot(page, { onTopDelay: 200 });
+  await page.locator('#btn-ontop').dblclick();
+  await expect(page.locator('#toast')).toContainText('Keep on top: on');
+  await page.waitForTimeout(400);                           // let any second call land
+  const pressed = await page.locator('#btn-ontop').getAttribute('aria-pressed');
+  expect(pressed).toBe(String(await windowOnTop(page)));
+  expect(pressed).toBe('true');
+});
+
+test('a refused pin leaves the button off and says why', async ({ page }) => {
+  await boot(page, { onTopFails: true });
+  await page.locator('#btn-ontop').click();
+  await expect(page.locator('#toast')).toContainText('Could not change keep on top');
+  await expect(page.locator('#btn-ontop')).toHaveAttribute('aria-pressed', 'false');
+  expect(await windowOnTop(page)).toBe(false);
+});
+
+test('a tab torn off a pinned window is created pinned, and off an unpinned one is not', async ({ page }) => {
+  await boot(page, twoDocs);
+  await page.keyboard.press('Control+o');
+  await page.keyboard.press('Control+t');                  // a third tab, so two can move
+  await expect(page.locator('.tab')).toHaveCount(3);
+  const moveFirst = async () => {
+    await page.locator('.tab').first().click({ button: 'right' });
+    await page.locator('#ctxMenu .menu-item', { hasText: 'Move to New Window' }).click();
+  };
+  await moveFirst();
+  await expect(page.locator('.tab')).toHaveCount(2);
+  await page.locator('#btn-ontop').click();
+  await expect(page.locator('#btn-ontop')).toHaveAttribute('aria-pressed', 'true');
+  await moveFirst();
+  await expect(page.locator('.tab')).toHaveCount(1);
+  const wins = await newWindows(page);
+  expect(wins.map((w) => w.pinned)).toEqual([false, true]);
+});
+
+test('a window that opens pinned shows its pin lit', async ({ page }) => {
+  // The torn-off window's side: Rust built it on top, and nothing told the
+  // page, so the button has to ask the window.
+  await boot(page, { onTop: true, windowLabel: 'win-2' });
+  await expect(page.locator('#btn-ontop')).toHaveAttribute('aria-pressed', 'true');
+  // ...and the first click therefore unpins, rather than asking for "on" again.
+  await page.locator('#btn-ontop').click();
+  await expect(page.locator('#btn-ontop')).toHaveAttribute('aria-pressed', 'false');
+  expect(await windowOnTop(page)).toBe(false);
+});
+
+test('with no desktop window to pin, there is no pin button', async ({ page }) => {
+  await page.goto('/index.html');                           // no Tauri stub
+  await expect(page.locator('body')).toHaveAttribute('data-view', 'edit');
+  await expect(page.locator('#btn-ontop')).toBeHidden();
+  await expect(page.locator('#btn-theme')).toBeVisible();   // the group is still there
 });
 
 // ---------------------------------------------------------------

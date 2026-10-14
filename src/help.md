@@ -147,6 +147,7 @@ number, or checkbox. Press **Enter on an empty item** to end the list.
 | -------- | ------ |
 | Ctrl+1 / 2 / 3 / 4 | Edit / Split / Read / Live view |
 | Ctrl+Shift+D | Cycle theme: System → Light → Dark |
+| Ctrl+Shift+T | Keep this window on top of other apps (press again to stop) |
 | Ctrl+Z / Ctrl+Y | Undo / Redo |
 | Ctrl+P | Print the rendered document |
 | F1 | This help |
@@ -375,3 +376,6 @@ X^2^
 - Web links in the preview open in your default browser.
 - The theme button cycles **System → Light → Dark**. "System" follows your
   Windows appearance setting.
+- The pin button keeps the window **on top** of other apps, and is
+  highlighted while it does. Each window has its own pin; a tab dragged out of
+  a pinned window arrives pinned. Glance starts unpinned every time.

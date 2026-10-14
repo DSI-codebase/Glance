@@ -38,6 +38,9 @@ reading it in well under a second.
   paths relative to the open document (`![diagram](images/diagram.png)`).
 - **Light / dark mode** — follows your Windows setting by default; the theme
   button cycles System → Light → Dark.
+- **Keep on top** — the pin button (Ctrl+Shift+T) keeps a window above every
+  other app, for reading notes beside whatever you are working in. Each window
+  has its own, and a tab dragged out of a pinned window arrives pinned.
 - **Standard Windows behavior** — Save / Save As / Open / New, native file
   dialogs, unsaved-changes prompt, undo/redo, familiar hotkeys.
 - **Built-in help** (F1) — a Markdown cheat sheet and the full shortcut list.
@@ -82,7 +85,7 @@ launch. The UI itself is plain HTML/CSS/JS with no framework.
 | **Structure** | Ctrl+Alt+1…6 heading · Ctrl+Alt+0 paragraph · Ctrl+Shift+Q quote |
 | **Lists** | Ctrl+Shift+8 bullets · Ctrl+Shift+7 numbered · Ctrl+Shift+9 checkboxes |
 | **Select** | Alt+drag column selection · Esc to end it |
-| **App** | Ctrl+K link · Ctrl+Shift+D theme · Ctrl+P print · F1 help |
+| **App** | Ctrl+K link · Ctrl+Shift+D theme · Ctrl+Shift+T keep on top · Ctrl+P print · F1 help |
 
 The full list is in the in-app help (F1).
 

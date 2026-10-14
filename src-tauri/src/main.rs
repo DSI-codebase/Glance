@@ -323,6 +323,10 @@ async fn open_in_new_window(
     doc: HandoffDoc,
     x: Option<f64>,
     y: Option<f64>,
+    // One word, so it has one spelling. Tauri expects a snake_case command
+    // argument as camelCase from the page — `on_top` would have to be sent as
+    // `onTop` — and a key that misses is a silent `None`, not an error.
+    pinned: Option<bool>,
 ) -> Result<(), String> {
     let n = NEXT_WINDOW.fetch_add(1, Ordering::Relaxed);
     let label = format!("win-{n}");
@@ -331,6 +335,11 @@ async fn open_in_new_window(
         .title("Glance")
         .inner_size(1080.0, 740.0)
         .min_inner_size(480.0, 320.0)
+        // A tab torn off a window kept on top stays on top. A topmost window
+        // sits above every window that is not, so an unpinned new window would
+        // open BEHIND its source wherever the two overlap — the tab the user
+        // just dragged out would appear to vanish.
+        .always_on_top(pinned.unwrap_or(false))
         .visible(false); // the page shows itself once painted, as the first window does
 
     // Windows declared in tauri.conf.json get the bundle icon automatically;

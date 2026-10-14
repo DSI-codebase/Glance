@@ -19,6 +19,12 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 
+# Dragging a document out of the window as a real file (Windows' DoDragDrop).
+# Windows-only because Glance ships nowhere else, and the crate's macOS and
+# Linux halves would otherwise compile for nothing.
+[target.'cfg(windows)'.dependencies]
+drag = "2.1.1"
+
 # Small binary, fast startup.
 [profile.release]
 codegen-units = 1

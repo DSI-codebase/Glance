@@ -23,6 +23,10 @@ reading it in well under a second.
   another copy.
 - **Tear-off windows** — right-click a tab and pick *Move to New Window*, or
   drag the tab out of the window and drop it. Unsaved text travels with it.
+- **Copy or drag out** — the copy button puts the document's text on the
+  clipboard. Held instead of clicked, or on a tab held still, it fills a bar
+  at the pointer and then drags the document out as a real `.md` file — onto
+  the desktop, into an email, or into a Claude session.
 - **Column selection** — Alt+drag selects a rectangle, like Notepad++ and the
   code editors. Drag down for a cursor on every line and type a prefix onto
   all of them at once; the whole edit undoes in one step.

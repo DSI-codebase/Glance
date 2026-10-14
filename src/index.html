@@ -104,6 +104,9 @@
     <div class="tb-sep"></div>
 
     <div class="tb-group">
+      <button class="tb-btn" id="btn-copy" title="Copy the text (click) · Hold, then drag out as a file" aria-label="Copy document text">
+        <svg viewBox="0 0 16 16"><path d="M5.5 1.5h7A1.5 1.5 0 0 1 14 3v8a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 4 11V3a1.5 1.5 0 0 1 1.5-1.5zm0 1.5v8h7V3h-7zM2 5h1.5v8.5H10V15H3.5A1.5 1.5 0 0 1 2 13.5V5z"/></svg>
+      </button>
       <button class="tb-btn" id="btn-ontop" title="Keep on top: Off (Ctrl+Shift+T)" aria-label="Keep window on top" aria-pressed="false">
         <svg viewBox="0 0 16 16"><path d="M5 1.5h6V3h-.75v3.5L12.5 9v1.5H8.75V15h-1.5v-4.5H3.5V9l2.25-2.5V3H5z"/></svg>
       </button>
@@ -165,6 +168,11 @@
   <div id="ctxMenu" hidden></div>
 
   <div id="toast" hidden></div>
+
+  <!-- Hold-to-drag progress, drawn at the cursor while a press on the copy
+       button or a tab is held still. Never a pointer target: it must not take
+       the pointer from the press it is timing. -->
+  <div id="holdBar" aria-hidden="true" hidden><div></div></div>
 
   <script src="vendor/markdown-it.min.js"></script>
   <script src="vendor/markdown-it-task-lists.min.js"></script>

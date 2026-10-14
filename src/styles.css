@@ -564,6 +564,15 @@ body[data-view="live"] .live-block input.task-list-item-checkbox { cursor: point
   flex: 0 0 auto;
 }
 
+/* Filled by app.js from the running app; empty in a browser. */
+#helpVersion {
+  margin-left: auto;
+  margin-right: 12px;
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
 #helpContent {
   overflow-y: auto;
   padding: 10px 26px 40px;

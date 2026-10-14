@@ -281,9 +281,22 @@
     return path ? path.split(/[\\/]/).pop() : 'Untitled';
   }
 
+  // The running app's version, for the title and the help header. Asked of
+  // Tauri rather than written into the page: it answers with tauri.conf.json's
+  // `version`, one of the six declarations check-versions.mjs holds together,
+  // so showing it adds no seventh. Empty in a browser, which has none to give.
+  let appVersion = '';
+
+  async function loadVersion() {
+    // In a browser `T` is null, and the TypeError lands in this catch too.
+    try { appVersion = String(await T.app.getVersion()); } catch (e) { return; }
+    document.getElementById('helpVersion').textContent = `Glance v${appVersion}`;
+  }
+
   function updateTitle() {
     const d = activeDoc();
-    const title = `${docDirty(d) ? '● ' : ''}${baseName(d && d.path)} - Glance`;
+    const app = appVersion ? `Glance v${appVersion}` : 'Glance';
+    const title = `${docDirty(d) ? '● ' : ''}${baseName(d && d.path)} - ${app}`;
     document.title = title;
     tauri.setTitle(title);
   }
@@ -2655,6 +2668,9 @@
   async function init() {
     applyTheme();
     syncOnTop();
+    // Started first and awaited last, so it overlaps the reads below and the
+    // window is never shown with a title that changes a moment later.
+    const versionLoaded = loadVersion();
 
     // A window created by tearing off a tab has its document waiting on the
     // Rust side under this window's label; every other window gets null back.
@@ -2700,6 +2716,7 @@
       }
     }
 
+    await versionLoaded;
     renderTabs(true);
     updateTitle();
     if (window.__showAppWindow) window.__showAppWindow();

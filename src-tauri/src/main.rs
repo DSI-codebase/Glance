@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -380,6 +381,193 @@ fn take_handoff(window: WebviewWindow, state: State<Handoffs>) -> Option<Handoff
     state.0.lock().ok()?.remove(window.label())
 }
 
+// -- dragging a document out as a file ------------------------------------ //
+//
+// What lands in Explorer, an email or a terminal has to be a REAL file: a
+// terminal pastes the dropped path and reads it later, so a virtual file that
+// exists only for the length of the drop would arrive as a path to nothing.
+// So the document is written to a folder of its own under the temp directory
+// and that path is what the drag carries.
+
+/// Where drag-out copies are written, one folder per drag.
+///
+/// The page recognizes a drop of one of these back onto Glance by the
+/// `Glance\drag-out` pair in its path — `app.js` names the same two
+/// components — and ignores it rather than opening a temp copy as a tab.
+fn drag_out_root() -> PathBuf {
+    std::env::temp_dir().join("Glance").join("drag-out")
+}
+
+/// A drag-out folder older than this is deleted when the next drag starts.
+///
+/// Not at drop time: a terminal pastes the path and Claude Code reads the file
+/// when the message is sent, which can be minutes after the drop. A day covers
+/// that, and an earlier sweep would break a path somebody already pasted.
+const DRAG_OUT_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
+
+static NEXT_DRAG: AtomicUsize = AtomicUsize::new(1);
+
+/// The name the page asked for, accepted only as one plain file name.
+///
+/// The page builds it from the document's own file name or the untitled
+/// pattern, so a separator here means something other than this app's page
+/// is talking — and `..\x` would write outside the folder made for it.
+fn drag_out_name(name: &str) -> Option<&str> {
+    const FORBIDDEN: &[char] = &['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+    let plain = !name.is_empty()
+        && name.len() <= 200
+        && !name.contains(FORBIDDEN)
+        && !name.chars().any(char::is_control)
+        // Windows strips a trailing dot or space, so the file written would
+        // not be the file named.
+        && !name.ends_with(['.', ' ']);
+    plain.then_some(name)
+}
+
+/// Whether a drag-out folder last written at `modified` is due for deletion.
+/// A clock that runs backwards answers "no": deleting on a guess is the one
+/// mistake this sweep must not make.
+fn drag_out_is_stale(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .map(|age| age > DRAG_OUT_KEEP)
+        .unwrap_or(false)
+}
+
+/// Delete drag-out folders past `DRAG_OUT_KEEP`. Best effort: a folder still
+/// open elsewhere is left for the next sweep.
+///
+/// `file_type()` does not follow links, so a link planted in the folder is
+/// skipped rather than having its target deleted.
+fn prune_drag_outs(root: &Path, now: SystemTime) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|t| drag_out_is_stale(t, now))
+            .unwrap_or(false);
+        if is_dir && stale {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// Write the document where a drag can carry it, and return the file's path.
+///
+/// Written in the file's own BOM and line endings, the same as a save: the
+/// copy of a CRLF document is a CRLF file.
+fn write_drag_out(
+    root: &Path,
+    name: &str,
+    contents: &str,
+    bom: bool,
+    eol: &str,
+) -> Result<PathBuf, String> {
+    let name = drag_out_name(name).ok_or_else(|| format!("Not a file name: {name:?}"))?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let n = NEXT_DRAG.fetch_add(1, Ordering::Relaxed);
+    // A folder per drag, so the file can carry the document's own name and
+    // two drags of the same name never overwrite a copy something still reads.
+    let dir = root.join(format!("{stamp}-{}-{n}", std::process::id()));
+    fs::create_dir_all(&dir).map_err(|e| format!("Could not prepare the drag: {e}"))?;
+    let path = dir.join(name);
+    fs::write(&path, reapply_encoding(contents, bom, eol))
+        .map_err(|e| format!("Could not prepare the drag: {e}"))?;
+    Ok(path)
+}
+
+/// Write the active document to a file and start an OS drag of it, returning
+/// once the drag ends: `true` if it was dropped somewhere, `false` if it was
+/// canceled.
+///
+/// "Dropped" is what `DoDragDrop` reports, which is that the button came up
+/// over a window accepting files — not that the target kept the file.
+#[tauri::command]
+async fn drag_out(
+    app: AppHandle,
+    window: WebviewWindow,
+    name: String,
+    contents: String,
+    bom: Option<bool>,
+    eol: Option<String>,
+) -> Result<bool, String> {
+    let root = drag_out_root();
+    prune_drag_outs(&root, SystemTime::now());
+    let path = write_drag_out(
+        &root,
+        &name,
+        &contents,
+        bom.unwrap_or(false),
+        eol.as_deref().unwrap_or("lf"),
+    )?;
+    start_file_drag(app, window, path).await
+}
+
+/// Run the drag on the main thread, where OLE's drag loop has to live, and
+/// wait for it off the async runtime's workers.
+///
+/// From an async command for the reason `open_in_new_window` gives: a sync
+/// command is already on the main thread, inside the webview's message
+/// handler, and `DoDragDrop` would run its own message loop nested in there.
+#[cfg(windows)]
+async fn start_file_drag(
+    app: AppHandle,
+    window: WebviewWindow,
+    path: PathBuf,
+) -> Result<bool, String> {
+    let (tx, rx) = std::sync::mpsc::channel::<Result<bool, String>>();
+    app.run_on_main_thread(move || {
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = dropped.clone();
+        let started = drag::start_drag(
+            &window,
+            drag::DragItem::Files(vec![path]),
+            // No custom image: an empty one fails to decode inside the crate
+            // and Windows draws its own drag cursor, which is what a file
+            // dragged out of Explorer looks like anyway.
+            drag::Image::Raw(Vec::new()),
+            move |result, _| {
+                seen.store(
+                    matches!(result, drag::DragResult::Dropped),
+                    Ordering::Relaxed,
+                );
+            },
+            // Copy, never Move. A move lets the target delete the source,
+            // and a terminal or mail client that took it would leave the next
+            // reader of that path with nothing.
+            drag::Options {
+                mode: drag::DragMode::Copy,
+                ..Default::default()
+            },
+        );
+        let _ = tx.send(
+            started
+                .map(|()| dropped.load(Ordering::Relaxed))
+                .map_err(|e| format!("Could not start the drag: {e}")),
+        );
+    })
+    .map_err(|e| format!("Could not start the drag: {e}"))?;
+    tauri::async_runtime::spawn_blocking(move || rx.recv())
+        .await
+        .map_err(|e| format!("The drag did not finish: {e}"))?
+        .map_err(|_| "The drag ended without a result".to_string())?
+}
+
+#[cfg(not(windows))]
+async fn start_file_drag(
+    _app: AppHandle,
+    _window: WebviewWindow,
+    _path: PathBuf,
+) -> Result<bool, String> {
+    Err("Dragging a document out is only built for Windows".into())
+}
+
 fn main() {
     tauri::Builder::default()
         // Must be registered first: a second launch (double-clicking another
@@ -439,7 +627,8 @@ fn main() {
             launch_file_path,
             take_pending_files,
             open_in_new_window,
-            take_handoff
+            take_handoff,
+            drag_out
         ])
         .run(tauri::generate_context!())
         .expect("error while running Glance");
@@ -626,5 +815,115 @@ mod tests {
         // A new document, and every route added later. Defaults must produce
         // what this app makes on its own rather than inheriting a BOM.
         assert_eq!(reapply_encoding("a\nb", false, "lf"), "a\nb");
+    }
+
+    // -- drag-out --------------------------------------------------------- //
+
+    /// A root of this test's own, so a sweep under test cannot reach a real
+    /// drag-out folder or another test's.
+    fn scratch_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "glance-test-{tag}-{}-{}",
+            std::process::id(),
+            NEXT_DRAG.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        root
+    }
+
+    #[test]
+    fn a_document_name_is_accepted_as_it_is() {
+        for name in [
+            "notes.md",
+            "Glance_Note_2026-10-14.md",
+            "read me.markdown",
+            "café.md",
+        ] {
+            assert_eq!(drag_out_name(name), Some(name), "{name:?} was refused");
+        }
+    }
+
+    #[test]
+    fn a_name_that_could_leave_its_folder_is_refused() {
+        // The complement, or a rule that accepted everything would pass the
+        // test above and write wherever the page pointed it.
+        for name in [
+            "",
+            "..",
+            ".",
+            r"..\escape.md",
+            "../escape.md",
+            r"C:\Windows\x.md",
+            "sub/notes.md",
+            "a:b.md",
+            "trailing.",
+            "trailing ",
+            "tab\there.md",
+        ] {
+            assert_eq!(drag_out_name(name), None, "{name:?} was accepted");
+        }
+    }
+
+    #[test]
+    fn staleness_is_measured_against_the_keep_window() {
+        let now = SystemTime::now();
+        let hour = Duration::from_secs(3600);
+        assert!(!drag_out_is_stale(now - hour, now));
+        assert!(drag_out_is_stale(now - DRAG_OUT_KEEP - hour, now));
+        // A file from the future is a clock problem, not a stale file.
+        assert!(!drag_out_is_stale(now + hour, now));
+    }
+
+    #[test]
+    fn a_drag_out_is_written_under_its_own_name_in_a_folder_of_its_own() {
+        let root = scratch_root("write");
+        let a = write_drag_out(&root, "notes.md", "# A\n", false, "lf").unwrap();
+        let b = write_drag_out(&root, "notes.md", "# B\n", false, "lf").unwrap();
+        assert_eq!(a.file_name().unwrap(), "notes.md");
+        assert_eq!(b.file_name().unwrap(), "notes.md");
+        assert_ne!(a, b, "a second drag of the same name overwrote the first");
+        assert_eq!(fs::read_to_string(&a).unwrap(), "# A\n");
+        assert_eq!(fs::read_to_string(&b).unwrap(), "# B\n");
+        assert!(a.starts_with(&root) && b.starts_with(&root));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_drag_out_keeps_the_files_bom_and_line_endings() {
+        let root = scratch_root("encoding");
+        let path = write_drag_out(&root, "w.md", "a\nb\n", true, "crlf").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), "\u{FEFF}a\r\nb\r\n".as_bytes());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_refused_name_writes_nothing() {
+        let root = scratch_root("refused");
+        assert!(write_drag_out(&root, r"..\escape.md", "x", false, "lf").is_err());
+        assert!(!root.exists(), "a refused drag still created its folder");
+    }
+
+    #[test]
+    fn the_sweep_deletes_old_drag_outs_and_nothing_else() {
+        let root = scratch_root("prune");
+        let path = write_drag_out(&root, "kept.md", "x", false, "lf").unwrap();
+        let loose = root.join("not-a-folder.txt");
+        fs::write(&loose, "x").unwrap();
+
+        // Swept "now": nothing is a day old yet.
+        prune_drag_outs(&root, SystemTime::now());
+        assert!(path.exists(), "a fresh drag-out was deleted");
+
+        // Swept two days on: the folder goes, the loose file stays.
+        prune_drag_outs(&root, SystemTime::now() + 2 * DRAG_OUT_KEEP);
+        assert!(!path.exists(), "a stale drag-out survived the sweep");
+        assert!(loose.exists(), "the sweep deleted a file it did not make");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sweeping_a_folder_that_does_not_exist_is_not_an_error() {
+        // The first drag on a machine: nothing to sweep yet.
+        prune_drag_outs(&scratch_root("absent"), SystemTime::now());
     }
 }

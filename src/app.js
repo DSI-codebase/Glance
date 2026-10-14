@@ -808,9 +808,12 @@
     if (!tab || docs.length < 2) return;
     drag = { id: Number(tab.dataset.id), x: e.clientX, y: e.clientY, tab, moved: false };
     try { tab.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety */ }
+    // Held still, the same press becomes a file drag instead; see startHold.
+    startHold(e, drag.id, tab);
   });
 
   tabbar.addEventListener('pointermove', (e) => {
+    moveHold(e);
     if (!drag) return;
     if (!drag.moved && (Math.abs(e.clientX - drag.x) > 6 || Math.abs(e.clientY - drag.y) > 6)) {
       drag.moved = true;
@@ -820,6 +823,7 @@
   });
 
   tabbar.addEventListener('pointerup', (e) => {
+    releaseHold();
     if (!drag) return;
     const { id, moved } = drag;
     const detach = moved && outsideWindow(e);
@@ -831,7 +835,7 @@
     if (detach) detachDoc(id, screenX, screenY);
   });
 
-  tabbar.addEventListener('pointercancel', endDrag);
+  tabbar.addEventListener('pointercancel', () => { cancelHold(); endDrag(); });
 
   // Autoscroll is armed on mousedown, so suppressing it at auxclick is too
   // late — the strip scrolls horizontally and would start panning.
@@ -954,6 +958,158 @@
     try { onTop = !!(await w.isAlwaysOnTop()); } catch (e) { return; }
     showOnTop();
   }
+
+  // ---------------- Copy, and drag out as a file ----------------
+  // A click on the copy button puts the active document's text on the
+  // clipboard. A press held still instead — on that button, or on a tab —
+  // fills a bar at the cursor and then starts an OS drag of the document as a
+  // real file, which Explorer, a mail client or a terminal takes like any
+  // other file. The copy button is the handle when only one document is open,
+  // because the tab strip is hidden then.
+  //
+  // The hold is what keeps this apart from a tab's own drag: moving a tab
+  // straight away still tears it off into a new window, and only a press that
+  // stays still until the bar fills becomes a file. Writing the file takes
+  // milliseconds; the bar is the time needed to tell the two gestures apart.
+
+  const copyBtn = document.getElementById('btn-copy');
+  const holdBar = document.getElementById('holdBar');
+  const HOLD_MS = 500;       // a still press this long becomes a file drag
+  const HOLD_SHOW_MS = 150;  // the bar waits this long, so a click never flashes it
+  const HOLD_SLOP = 6;       // the tab drag's own threshold, so the two agree
+
+  // Glance's own drag-out copies: `drag_out_root` in main.rs writes under
+  // `<temp>\Glance\drag-out\`. One released back over a Glance window is the
+  // user letting go too early, not a document to open as a tab.
+  const OWN_DRAG_OUT_RE = /[\\/]Glance[\\/]drag-out[\\/]/i;
+
+  let hold = null;
+  let draggingOut = false;
+  // A drag that started from the copy button must not also copy when its
+  // press ends in a click. Cleared at the next press, because the OS drag
+  // usually swallows the release and no click comes to clear it.
+  let suppressCopyClick = false;
+
+  function dragOutName(d) {
+    if (d.path) return baseName(d.path);
+    const t = new Date();
+    const two = (n) => String(n).padStart(2, '0');
+    return `Glance_Note_${t.getFullYear()}-${two(t.getMonth() + 1)}-${two(t.getDate())}.md`;
+  }
+
+  // `d.content` is what is on screen, unsaved edits included: every edit
+  // fires `input`, and its listener copies the textarea into it — the
+  // setRangeText fallback in replaceRange dispatches one by hand for this.
+
+  async function copyDocText() {
+    const d = activeDoc();
+    if (!d) return;
+    const text = d.content;
+    // Copying nothing would empty the clipboard of whatever was on it.
+    if (!text) { showToast('Nothing to copy'); return; }
+    // CRLF: Windows defines its clipboard text formats with CR-LF line ends,
+    // and the editor holds LF whatever the file used.
+    const out = text.replace(/\r?\n/g, '\r\n');
+    try {
+      if (T && T.clipboardManager) await T.clipboardManager.writeText(out);
+      else await navigator.clipboard.writeText(out);
+    } catch (err) {
+      showToast(`Could not copy: ${err}`, true);
+      return;
+    }
+    showToast(`Copied ${baseName(d.path)}`);
+  }
+
+  async function dragOutDoc(id) {
+    const d = docs.find((x) => x.id === id);
+    if (!d || draggingOut) return;
+    const contents = d.content;
+    if (!contents) { showToast('Nothing to drag out: the document is empty'); return; }
+    draggingOut = true;
+    try {
+      // Resolves when the drag ends, dropped or not. bom and eol travel for
+      // the reason they travel on a save: the copy of a CRLF file is CRLF.
+      await tauri.invoke('drag_out', {
+        name: dragOutName(d), contents, bom: !!d.bom, eol: d.eol || 'lf',
+      });
+    } catch (err) {
+      showToast(String(err), true);
+    } finally {
+      draggingOut = false;
+    }
+  }
+
+  function placeHoldBar(x, y) {
+    holdBar.style.left = `${x + 14}px`;
+    holdBar.style.top = `${y + 18}px`;
+  }
+
+  function cancelHold() {
+    if (hold) { clearTimeout(hold.timer); clearTimeout(hold.showTimer); }
+    hold = null;
+    holdBar.hidden = true;
+  }
+
+  // A browser has no OS drag to start, so a hold there is only a slow click.
+  function startHold(e, docId, el) {
+    if (!tauri.available || e.button !== 0 || draggingOut) return;
+    cancelHold();
+    hold = { id: docId, el, pointerId: e.pointerId, x: e.clientX, y: e.clientY, armed: false };
+    placeHoldBar(e.clientX, e.clientY);
+    hold.showTimer = setTimeout(() => {
+      holdBar.style.setProperty('--hold-ms', `${HOLD_MS - HOLD_SHOW_MS}ms`);
+      holdBar.hidden = false;
+    }, HOLD_SHOW_MS);
+    hold.timer = setTimeout(armHold, HOLD_MS);
+  }
+
+  // Moving past the slop before the bar fills hands the press back: to the
+  // tab's tear-off, or to nothing on the copy button.
+  function moveHold(e) {
+    if (!hold || hold.armed || e.pointerId !== hold.pointerId) return;
+    if (Math.abs(e.clientX - hold.x) > HOLD_SLOP || Math.abs(e.clientY - hold.y) > HOLD_SLOP) {
+      cancelHold();
+      return;
+    }
+    placeHoldBar(e.clientX, e.clientY);
+  }
+
+  // A release before the bar fills is an ordinary click.
+  function releaseHold() {
+    if (hold && !hold.armed) cancelHold();
+  }
+
+  async function armHold() {
+    if (!hold) return;
+    const { id, el } = hold;
+    hold.armed = true;
+    // The bar would freeze where the press was once the OS drag owns the
+    // pointer; Windows' drag cursor follows it from here instead.
+    holdBar.hidden = true;
+    if (el === copyBtn) suppressCopyClick = true;
+    // The press is a file drag now. A tab must not also tear off on release —
+    // which it would when no OS drag starts (refused, or an empty document)
+    // and the page still holds the pointer.
+    endDrag();
+    await dragOutDoc(id);
+    cancelHold();
+  }
+
+  copyBtn.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    suppressCopyClick = false;
+    try { copyBtn.setPointerCapture(e.pointerId); } catch (err) { /* capture is a nicety */ }
+    if (activeId !== null) startHold(e, activeId, copyBtn);
+  });
+  copyBtn.addEventListener('pointermove', moveHold);
+  copyBtn.addEventListener('pointerup', releaseHold);
+  copyBtn.addEventListener('pointercancel', cancelHold);
+  copyBtn.addEventListener('click', (e) => {
+    // detail is 0 for Enter or Space, which no drag can have preceded.
+    if (suppressCopyClick && e.detail !== 0) { suppressCopyClick = false; return; }
+    copyDocText();
+  });
+  window.addEventListener('blur', cancelHold);
 
   // ---------------- Editor text manipulation ----------------
   // All edits go through execCommand('insertText') so the native
@@ -2461,7 +2617,13 @@
     webview.onDragDropEvent(async (event) => {
       const payload = event.payload;
       if (!payload || payload.type !== 'drop' || !payload.paths || !payload.paths.length) return;
-      for (const p of payload.paths.filter((x) => MD_EXT_RE.test(x))) {
+      // A drag-out let go over Glance itself would otherwise open its temp
+      // copy as a tab, which saves to the temp folder instead of the file.
+      if (payload.paths.some((x) => OWN_DRAG_OUT_RE.test(x))) {
+        showToast('Let go outside Glance to drop the file');
+      }
+      const opening = payload.paths.filter((x) => MD_EXT_RE.test(x) && !OWN_DRAG_OUT_RE.test(x));
+      for (const p of opening) {
         await openPath(p);
       }
     });

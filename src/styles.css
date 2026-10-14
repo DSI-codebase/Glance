@@ -159,6 +159,31 @@ body {
 }
 #btn-ontop[hidden] { display: none; }
 
+/* Hold-to-drag. The fill restarts each time the bar is un-hidden, because an
+   element with display: none has no running animation to resume. */
+#holdBar {
+  position: fixed;
+  z-index: 1000;
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--btn-active);
+  box-shadow: 0 0 0 1px var(--border);
+  overflow: hidden;
+  pointer-events: none;
+}
+#holdBar[hidden] { display: none; }
+#holdBar > div {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+  animation: hold-fill var(--hold-ms, 350ms) linear forwards;
+}
+@keyframes hold-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
 body[data-view="read"] .edit-only { display: none; }
 
 /* ---------------- Tab bar ---------------- */

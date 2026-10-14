@@ -107,6 +107,13 @@ Points that matter:
   over-reports them.
 - No crate is missing a license field, and there is no GPL or AGPL anywhere
   in the tree.
+- **`drag`** (CrabNebula, `Apache-2.0 OR MIT`) starts the Windows drag that
+  carries a document out as a file. It was added after the count above, and
+  read from the `Cargo.lock` diff on 2026-10-14 it links six crate-versions
+  into the binary — itself, `windows` 0.52, `windows-core` 0.52 and 0.58,
+  `windows-result` 0.2, `windows-strings` 0.1 — plus four proc-macro crates
+  used only while compiling. Every one is `MIT OR Apache-2.0`, the first row
+  of the table.
 
 To regenerate this inventory mechanically:
 

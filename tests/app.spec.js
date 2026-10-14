@@ -40,6 +40,10 @@ function tauriStub(opts) {
       onTop: false,
       onTopFails: false,
       onTopDelay: 0,
+      // Every drag_out the page asked for. The real command resolves when the
+      // OS drag ends, so this one resolves at once with "dropped".
+      dragOuts: [],
+      dragOutFails: false,
     }, ${JSON.stringify(opts || {})});
     const T = () => window.__TAURI_TEST__;
     window.__TAURI__ = {
@@ -88,6 +92,10 @@ function tauriStub(opts) {
           if (cmd === 'open_in_new_window') {
             if (T().newWindowFails) throw 'Could not open a new window: denied';
             T().newWindows.push(args); return null;
+          }
+          if (cmd === 'drag_out') {
+            if (T().dragOutFails) throw 'Could not prepare the drag: denied';
+            T().dragOuts.push(args); return true;
           }
           throw new Error('unknown command ' + cmd);
         },
@@ -1163,6 +1171,221 @@ test('with no desktop window to pin, there is no pin button', async ({ page }) =
   await expect(page.locator('body')).toHaveAttribute('data-view', 'edit');
   await expect(page.locator('#btn-ontop')).toBeHidden();
   await expect(page.locator('#btn-theme')).toBeVisible();   // the group is still there
+});
+
+// ---------------------------------------------------------------
+// Copy, and drag out as a file
+// ---------------------------------------------------------------
+
+const dragOuts = (page) => page.evaluate(() => window.__TAURI_TEST__.dragOuts);
+const clipboardText = (page) => page.evaluate(() => window.__TAURI_TEST__.clipboardText);
+
+// Press on the middle of `locator`, hold for `ms`, let go. HOLD_MS is 500, so
+// 700 arms a file drag and 120 is a click.
+async function holdOn(page, locator, ms) {
+  const box = await locator.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(ms);
+  await page.mouse.up();
+}
+
+const oneDoc = {
+  launchFile: 'C:\\d\\notes.md',
+  files: { 'C:\\d\\notes.md': '# Notes\n\nline two\n' },
+};
+
+test('the copy button puts the document text on the clipboard, with Windows line breaks', async ({ page }) => {
+  await boot(page, oneDoc);
+  await page.locator('#btn-copy').click();
+  await expect(page.locator('#toast')).toContainText('Copied notes.md');
+  expect(await clipboardText(page)).toBe('# Notes\r\n\r\nline two\r\n');
+});
+
+test('copy takes what is on screen, unsaved edits included', async ({ page }) => {
+  await boot(page, oneDoc);
+  await setEditor(page, 'edited\nbut not saved');
+  await page.locator('#btn-copy').click();
+  await expect(page.locator('#toast')).toContainText('Copied');
+  expect(await clipboardText(page)).toBe('edited\r\nbut not saved');
+});
+
+test('copying an empty document leaves the clipboard alone', async ({ page }) => {
+  await boot(page, { clipboardText: 'already there' });
+  await page.locator('#btn-copy').click();
+  await expect(page.locator('#toast')).toContainText('Nothing to copy');
+  expect(await clipboardText(page)).toBe('already there');
+});
+
+test('holding the copy button drags the document out as a file named after it', async ({ page }) => {
+  await boot(page, { ...oneDoc, clipboardText: 'before' });
+  await holdOn(page, page.locator('#btn-copy'), 700);
+  await expect.poll(() => dragOuts(page)).toHaveLength(1);
+  expect((await dragOuts(page))[0]).toEqual({
+    name: 'notes.md', contents: '# Notes\n\nline two\n', bom: false, eol: 'lf',
+  });
+  // The release that ended the drag is not also a copy.
+  expect(await clipboardText(page)).toBe('before');
+});
+
+test('a click on the copy button after a drag copies again', async ({ page }) => {
+  // On Windows the OS drag swallows the release, so no click arrives to clear
+  // the "this press was a drag" flag; the next press has to. Playwright's
+  // mouse always ends a press in a click, so the press here is dispatched by
+  // hand and never released — which is what the page sees of a real drag.
+  await boot(page, { ...oneDoc, clipboardText: 'before' });
+  await page.evaluate(() => {
+    const btn = document.getElementById('btn-copy');
+    const r = btn.getBoundingClientRect();
+    btn.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true, button: 0, pointerId: 7, clientX: r.x + 4, clientY: r.y + 4,
+    }));
+  });
+  await expect.poll(() => dragOuts(page)).toHaveLength(1);
+  expect(await clipboardText(page)).toBe('before');
+  await page.locator('#btn-copy').click();
+  await expect.poll(() => clipboardText(page)).toBe('# Notes\r\n\r\nline two\r\n');
+});
+
+test('a short press on the copy button is a click: it copies and drags nothing', async ({ page }) => {
+  await boot(page, oneDoc);
+  await holdOn(page, page.locator('#btn-copy'), 120);
+  await expect.poll(() => clipboardText(page)).toBe('# Notes\r\n\r\nline two\r\n');
+  await page.waitForTimeout(600);                          // past where a hold would arm
+  expect(await dragOuts(page)).toHaveLength(0);
+});
+
+test('the bar waits out a click, shows while the press is held, and goes when the drag starts', async ({ page }) => {
+  await boot(page, oneDoc);
+  const box = await page.locator('#btn-copy').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(60);
+  await expect(page.locator('#holdBar')).toBeHidden();     // a click never flashes it
+  await expect(page.locator('#holdBar')).toBeVisible();
+  await expect.poll(() => dragOuts(page)).toHaveLength(1);
+  await expect(page.locator('#holdBar')).toBeHidden();
+  await page.mouse.up();
+});
+
+test('moving off during the hold cancels the drag', async ({ page }) => {
+  await boot(page, oneDoc);
+  const box = await page.locator('#btn-copy').boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(200);
+  await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 30, { steps: 3 });
+  await expect(page.locator('#holdBar')).toBeHidden();
+  await page.waitForTimeout(600);
+  await page.mouse.up();
+  expect(await dragOuts(page)).toHaveLength(0);
+});
+
+test('an untitled document drags out as Glance_Note_ and the date', async ({ page }) => {
+  await page.clock.setFixedTime(new Date(2026, 9, 14, 15, 32));   // 14 October, local time
+  await boot(page);
+  await setEditor(page, 'a scratch note');
+  await holdOn(page, page.locator('#btn-copy'), 700);
+  await expect.poll(() => dragOuts(page)).toHaveLength(1);
+  expect((await dragOuts(page))[0].name).toBe('Glance_Note_2026-10-14.md');
+  expect((await dragOuts(page))[0].contents).toBe('a scratch note');
+});
+
+test('a CRLF file with a BOM is dragged out with both', async ({ page }) => {
+  await boot(page, { launchFile: 'C:\\d\\w.md', files: { 'C:\\d\\w.md': '\uFEFF# W\r\nx\r\n' } });
+  await holdOn(page, page.locator('#btn-copy'), 700);
+  await expect.poll(() => dragOuts(page)).toHaveLength(1);
+  expect((await dragOuts(page))[0]).toEqual({
+    name: 'w.md', contents: '# W\nx\n', bom: true, eol: 'crlf',
+  });
+});
+
+test('an empty document is not dragged out', async ({ page }) => {
+  await boot(page);
+  await holdOn(page, page.locator('#btn-copy'), 700);
+  await expect(page.locator('#toast')).toContainText('Nothing to drag out');
+  expect(await dragOuts(page)).toHaveLength(0);
+});
+
+test('a refused drag-out says why', async ({ page }) => {
+  await boot(page, { ...oneDoc, dragOutFails: true });
+  await holdOn(page, page.locator('#btn-copy'), 700);
+  await expect(page.locator('#toast')).toContainText('Could not prepare the drag');
+});
+
+test('holding a tab still drags that document out, and does not tear it off', async ({ page }) => {
+  await boot(page, twoDocs);
+  await page.keyboard.press('Control+o');
+  await expect(page.locator('.tab')).toHaveCount(2);
+  await holdOn(page, page.locator('.tab').first(), 700);
+  await expect.poll(() => dragOuts(page)).toHaveLength(1);
+  const out = (await dragOuts(page))[0];
+  expect(out.name).toBe('a.md');
+  expect(out.contents).toContain('AAA');
+  expect(await newWindows(page)).toHaveLength(0);
+  await expect(page.locator('.tab')).toHaveCount(2);
+});
+
+test('a tab held into a drag-out does not also tear off when it is let go outside', async ({ page }) => {
+  // A refused drag-out starts no OS drag, so the page keeps receiving the
+  // pointer. Once armed, the press belongs to the file drag either way.
+  await boot(page, { ...twoDocs, dragOutFails: true });
+  await page.keyboard.press('Control+o');
+  await expect(page.locator('.tab')).toHaveCount(2);
+  const box = await page.locator('.tab').first().boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(700);
+  await expect(page.locator('#toast')).toContainText('Could not prepare the drag');
+  const size = page.viewportSize();
+  await page.mouse.move(size.width + 80, 200, { steps: 4 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  expect(await newWindows(page)).toHaveLength(0);
+  await expect(page.locator('.tab')).toHaveCount(2);
+});
+
+test('a tab dragged away at once still tears off, and writes no file', async ({ page }) => {
+  await boot(page, twoDocs);
+  await page.keyboard.press('Control+o');
+  const box = await page.locator('.tab').first().boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 40, box.y + 40, { steps: 4 });
+  const size = page.viewportSize();
+  await page.mouse.move(size.width + 80, 200, { steps: 4 });
+  await page.waitForTimeout(600);                          // held past HOLD_MS, but not still
+  await page.mouse.up();
+  await expect(page.locator('.tab')).toHaveCount(1);
+  expect(await newWindows(page)).toHaveLength(1);
+  expect(await dragOuts(page)).toHaveLength(0);
+});
+
+test('a drag-out let go over Glance is not opened as a tab', async ({ page }) => {
+  await boot(page, { files: { 'C:\\d\\real.md': '# Real' } });
+  await page.evaluate(() => window.__TAURI_TEST__.dropHandler({ payload: { type: 'drop', paths: [
+    'C:\\Users\\u\\AppData\\Local\\Temp\\Glance\\drag-out\\1760450000000-42-1\\notes.md',
+  ] } }));
+  await expect(page.locator('#toast')).toContainText('Let go outside Glance');
+  await expect(page).toHaveTitle(/^Untitled/);
+  // ...while a real file dropped alongside one still opens.
+  await page.evaluate(() => window.__TAURI_TEST__.dropHandler({ payload: { type: 'drop', paths: [
+    'C:\\Users\\u\\AppData\\Local\\Temp\\Glance\\drag-out\\1760450000000-42-2\\notes.md',
+    'C:\\d\\real.md',
+  ] } }));
+  await expect(page).toHaveTitle(/^real\.md/);
+  expect(await page.evaluate(() => window.__TAURI_TEST__.invokes
+    .filter((i) => i[0] === 'read_text_file').map((i) => i[1].path))).toEqual(['C:\\d\\real.md']);
+});
+
+test('in a plain browser, holding the copy button is only a slow click', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/index.html');                           // no Tauri stub
+  await setEditor(page, 'one\ntwo');
+  await holdOn(page, page.locator('#btn-copy'), 700);
+  await expect(page.locator('#toast')).toContainText('Copied');
+  await expect(page.locator('#holdBar')).toBeHidden();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('one\r\ntwo');
 });
 
 // ---------------------------------------------------------------

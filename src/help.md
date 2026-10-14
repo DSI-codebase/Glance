@@ -71,6 +71,25 @@ Unsaved text comes along, so there is nothing to save first and nothing to
 confirm. A window showing only one document has nothing to move out, so the
 menu item is greyed out there.
 
+## Copying a document, or dragging it out as a file
+
+The copy button (two sheets, at the right of the toolbar) works two ways:
+
+- **Click it** to put the whole document's text on the clipboard, ready to
+  paste with Ctrl+V anywhere.
+- **Press and hold it** until the small bar at the pointer fills, then — still
+  holding — move to the desktop, a folder, an email or a Claude window and
+  let go. A `.md` file of the document lands there.
+
+**Holding a tab still** does the same for that tab's document. Dragging a tab
+away *straight away*, without waiting for the bar, still moves it to its own
+window as before.
+
+The file is named after the document (`notes.md`), or `Glance_Note_` and the
+date for one never saved. It holds what is on screen, unsaved edits
+included, and the document itself is not touched. Letting go back over
+Glance does nothing.
+
 ## Column selection
 
 Hold **Alt** and drag to select a rectangle instead of a run of text, the way

@@ -44,6 +44,11 @@ function tauriStub(opts) {
       // OS drag ends, so this one resolves at once with "dropped".
       dragOuts: [],
       dragOutFails: false,
+      // What app.getVersion answers. Not the repository's version on
+      // purpose: a test that agreed with package.json would pass whether the
+      // page read the version or had it written in.
+      version: '9.8.7',
+      versionDelay: 0,
     }, ${JSON.stringify(opts || {})});
     const T = () => window.__TAURI_TEST__;
     window.__TAURI__ = {
@@ -113,7 +118,8 @@ function tauriStub(opts) {
         getCurrentWindow: () => ({
           label: T().windowLabel || 'main',
           setTitle: async (t) => { T().title = t; },
-          show: async () => {},
+          // The title the window had when it first became visible.
+          show: async () => { if (!('titleAtShow' in T())) T().titleAtShow = T().title; },
           setFocus: async () => {},
           unminimize: async () => {},
           close: async () => { T().closed = true; },
@@ -134,6 +140,12 @@ function tauriStub(opts) {
         getCurrentWebview: () => ({
           onDragDropEvent: (h) => { T().dropHandler = h; },
         }),
+      },
+      app: {
+        getVersion: async () => {
+          if (T().versionDelay) await new Promise((r) => setTimeout(r, T().versionDelay));
+          return T().version;
+        },
       },
       opener: { openUrl: async (u) => { T().openedUrls.push(u); } },
       clipboardManager: {
@@ -522,6 +534,40 @@ test('theme cycles system → light → dark and persists', async ({ page }) => 
   expect(await page.evaluate(() => localStorage.getItem('smr-theme'))).toBe('dark');
   await page.reload();
   expect(await theme()).toBe('dark');
+});
+
+// ---------------------------------------------------------------
+// Version
+// ---------------------------------------------------------------
+
+test('the window title ends in the running version', async ({ page }) => {
+  await boot(page);
+  await expect(page).toHaveTitle('Untitled - Glance v9.8.7');
+  expect(await page.evaluate(() => window.__TAURI_TEST__.title)).toBe('Untitled - Glance v9.8.7');
+  await setEditor(page, 'changed');
+  await expect(page).toHaveTitle('● Untitled - Glance v9.8.7');
+});
+
+test('the window is not shown until its title has the version', async ({ page }) => {
+  // A slow answer, so a page that showed the window without waiting for it
+  // would be caught showing "Glance" and renaming itself a moment later.
+  await boot(page, { versionDelay: 300 });
+  await expect.poll(() => page.evaluate(() => window.__TAURI_TEST__.titleAtShow))
+    .toBe('Untitled - Glance v9.8.7');
+});
+
+test('the help header shows the version', async ({ page }) => {
+  await boot(page);
+  await page.keyboard.press('F1');
+  await expect(page.locator('#helpVersion')).toHaveText('Glance v9.8.7');
+});
+
+test('with no app to ask, the title is plain Glance and the help shows no version', async ({ page }) => {
+  await page.goto('/index.html');                           // no Tauri stub
+  await expect(page).toHaveTitle('Untitled - Glance');
+  await page.keyboard.press('F1');
+  await expect(page.locator('#helpPanel')).toBeVisible();
+  await expect(page.locator('#helpVersion')).toHaveText('');
 });
 
 test('F1 opens help with the cheat sheet and shortcuts; Esc closes it', async ({ page }) => {

@@ -12,7 +12,7 @@ contribution is accepted under the same terms.
 ```bash
 cd tests
 npm ci
-npx playwright test          # 85 tests
+npx playwright test          # prints the current count
 ```
 
 That is the whole frontend gate and it needs **no Rust, no Tauri and no
